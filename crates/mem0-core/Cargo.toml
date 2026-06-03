@@ -1,0 +1,27 @@
+[package]
+name = "mem0-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core memory orchestration, config, prompts, and provider traits for the mem0 Rust port"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+rusqlite.workspace = true
+md-5.workspace = true
+regex.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "core_ops"
+harness = false

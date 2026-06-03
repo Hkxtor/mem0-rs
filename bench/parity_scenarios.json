@@ -1,0 +1,19 @@
+[
+  {"op": "add", "user": "u1", "text": "I love hiking climbing mountains every weekend", "infer": false, "meta": {"category": "hobby"}},
+  {"op": "add", "user": "u1", "text": "My favorite food is homemade margherita pizza", "infer": false, "meta": {"category": "food"}},
+  {"op": "add", "user": "u1", "text": "I work as a software engineer building distributed systems", "infer": false, "meta": {"category": "work"}},
+  {"op": "add", "user": "u1", "text": "I enjoy cooking italian pasta and tiramisu", "infer": false, "meta": {"category": "food"}},
+  {"op": "add", "user": "u1", "text": "Planning a trip to Japan to see Mount Fuji", "infer": false, "meta": {"category": "travel"}},
+  {"op": "add", "user": "u1", "text": "Hi I am Alex and I adore trail running in the alps", "infer": true, "llm": {"memory": [{"text": "User name is Alex"}, {"text": "User adores trail running in the alps"}]}},
+  {"op": "add", "user": "u1", "text": "My name is Alex just confirming", "infer": true, "llm": {"memory": [{"text": "User name is Alex"}]}},
+  {"op": "get_all", "user": "u1"},
+  {"op": "search", "user": "u1", "query": "hiking climbing mountains weekend", "top_k": 3},
+  {"op": "search", "user": "u1", "query": "homemade margherita pizza", "top_k": 3},
+  {"op": "search", "user": "u1", "query": "software engineer building distributed systems", "top_k": 2},
+  {"op": "search", "user": "u1", "query": "food", "top_k": 5, "filter": {"category": {"eq": "food"}}},
+  {"op": "update", "add_index": 1, "text": "My favorite food is deep dish chicago pizza"},
+  {"op": "history", "add_index": 1},
+  {"op": "search", "user": "u1", "query": "deep dish chicago pizza", "top_k": 1},
+  {"op": "delete", "add_index": 4},
+  {"op": "get_all", "user": "u1"}
+]

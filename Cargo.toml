@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mem0-core",
+    "crates/mem0-embed",
+    "crates/mem0-llm",
+    "crates/mem0-vector",
+    "crates/mem0-rerank",
+    "crates/mem0",
+    "crates/mem0-server",
+    "crates/mem0-client",
+    "crates/mem0-proxy",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/mem0ai/mem0"
+description = "Rust port of mem0 — long-term memory for AI agents"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+md-5 = "0.10"
+regex = "1"
+tracing = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+wiremock = "0.6"
+tempfile = "3"
+axum = "0.7"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[profile.release]
+opt-level = 3

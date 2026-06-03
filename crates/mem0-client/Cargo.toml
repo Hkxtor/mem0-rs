@@ -1,0 +1,12 @@
+[package]
+name = "mem0-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HTTP client for the mem0 Rust REST server"
+
+[dependencies]
+mem0-core = { path = "../mem0-core" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true

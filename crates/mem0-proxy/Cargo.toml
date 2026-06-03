@@ -1,0 +1,16 @@
+[package]
+name = "mem0-proxy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Memory-augmented chat proxy for the mem0 Rust port"
+
+[dependencies]
+mem0 = { path = "../mem0" }
+mem0-core = { path = "../mem0-core" }
+mem0-llm = { path = "../mem0-llm" }
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

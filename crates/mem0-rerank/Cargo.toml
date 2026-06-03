@@ -1,0 +1,20 @@
+[package]
+name = "mem0-rerank"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reranker providers for the mem0 Rust port (Cohere, ZeroEntropy, LLM)"
+
+[dependencies]
+mem0-core = { path = "../mem0-core" }
+mem0-llm = { path = "../mem0-llm" }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+regex.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock.workspace = true

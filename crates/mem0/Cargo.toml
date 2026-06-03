@@ -1,0 +1,29 @@
+[package]
+name = "mem0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "mem0 — long-term memory for AI agents (Rust). Facade wiring embedders, LLMs, vector stores, and rerankers."
+
+[dependencies]
+mem0-core = { path = "../mem0-core" }
+mem0-embed = { path = "../mem0-embed" }
+mem0-llm = { path = "../mem0-llm" }
+mem0-vector = { path = "../mem0-vector" }
+mem0-rerank = { path = "../mem0-rerank" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+
+[features]
+default = []
+qdrant = ["mem0-vector/qdrant"]
+pgvector = ["mem0-vector/pgvector"]
+
+[dev-dependencies]
+tokio.workspace = true
+criterion.workspace = true
+async-trait.workspace = true
+
+[[bench]]
+name = "memory_ops"
+harness = false

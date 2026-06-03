@@ -1,0 +1,18 @@
+[package]
+name = "mem0-embed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Embedding providers for the mem0 Rust port (OpenAI, Azure, Gemini, Ollama, OpenAI-compatible)"
+
+[dependencies]
+mem0-core = { path = "../mem0-core" }
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock.workspace = true

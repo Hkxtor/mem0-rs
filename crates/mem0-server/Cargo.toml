@@ -1,0 +1,35 @@
+[package]
+name = "mem0-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "axum REST server exposing the mem0 memory API as a single binary"
+
+[lib]
+name = "mem0_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mem0-server"
+path = "src/main.rs"
+
+[dependencies]
+mem0 = { path = "../mem0" }
+mem0-core = { path = "../mem0-core" }
+axum.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[features]
+default = []
+qdrant = ["mem0/qdrant"]
+pgvector = ["mem0/pgvector"]
+
+[dev-dependencies]
+mem0-client = { path = "../mem0-client" }
+tokio.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
