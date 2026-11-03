@@ -195,6 +195,11 @@ bench/run_compare.sh 2000 500
 
 The [documentation index](docs/README.md) links everything else, including the [architecture](docs/architecture.md), the [configuration reference](docs/configuration.md), the [Rust API](docs/api/library.md) and [deployment notes](docs/devops.md).
 
+## Project background
+
+- [mem0-rs project overview](https://chabot.dev/projects/#mem0-ports) on Chris Chabot’s site.
+- [The prompt I was not allowed to improve](https://chabot.dev/blog/porting-agent-memory-means-porting-behavior/): preserving memory behaviour across Rust and TypeScript ports.
+
 ## Attribution and license
 
 mem0-rs is an independent port of [mem0](https://github.com/mem0ai/mem0) from mem0ai, based on v2.0.4 of the Python package `mem0ai`. The memory pipeline, retrieval design and prompts are theirs, and the prompts ship here as verbatim copies generated from upstream's source; this repository contributes the Rust implementation, the in-process store and the built-in text processing.
