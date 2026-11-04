@@ -67,9 +67,13 @@ pub fn from_json(s: &str) -> Result<Memory> {
 }
 
 fn inject_dims(config: &mut Value, dims: usize) {
+    // The embedder's dimensionality is the single source of truth and the vector
+    // store follows it (Python mem0's _sync_embedding_dims overwrites, not or_insert):
+    // an update that only changes the LLM must not reset the column width, but an
+    // update that changes the embedder model must win over a stale stored value.
     match config {
         Value::Object(map) => {
-            map.entry("embedding_model_dims").or_insert(json!(dims));
+            map.insert("embedding_model_dims".to_string(), json!(dims));
         }
         Value::Null => {
             *config = json!({ "embedding_model_dims": dims });
@@ -190,5 +194,25 @@ pub mod blocking {
         pub fn reset(&self) -> Result<()> {
             self.rt.block_on(self.inner.reset())
         }
+    }
+}
+
+#[cfg(test)]
+mod inject_dims_tests {
+    use super::*;
+
+    #[test]
+    fn embedder_dims_overwrite_stale_stored_value() {
+        let mut cfg = json!({"embedding_model_dims": 1536});
+        inject_dims(&mut cfg, 768);
+        assert_eq!(cfg["embedding_model_dims"], json!(768));
+    }
+
+    #[test]
+    fn embedder_dims_fill_missing_value() {
+        let mut cfg = json!({"collection_name": "mem0"});
+        inject_dims(&mut cfg, 768);
+        assert_eq!(cfg["embedding_model_dims"], json!(768));
+        assert_eq!(cfg["collection_name"], json!("mem0"));
     }
 }
