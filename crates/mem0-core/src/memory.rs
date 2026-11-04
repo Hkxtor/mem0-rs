@@ -83,6 +83,7 @@ pub struct Memory {
     entity_store: Option<Box<dyn VectorStore>>,
     db: HistoryStore,
     custom_instructions: Option<String>,
+    use_input_language: bool,
 }
 
 impl Memory {
@@ -96,6 +97,7 @@ impl Memory {
     ) -> Result<Self> {
         let db = HistoryStore::new(&config.history_db_path)?;
         let custom_instructions = config.custom_instructions.clone();
+        let use_input_language = config.use_input_language;
         Ok(Self {
             config,
             embedder,
@@ -105,6 +107,7 @@ impl Memory {
             entity_store: None,
             db,
             custom_instructions,
+            use_input_language,
         })
     }
 
@@ -258,7 +261,7 @@ impl Memory {
             current_date: None,
             observation_date: None,
             custom_instructions: custom_instr,
-            use_input_language: false,
+            use_input_language: self.use_input_language,
         });
 
         let llm_messages = vec![Message::system(system_prompt), Message::user(user_prompt)];

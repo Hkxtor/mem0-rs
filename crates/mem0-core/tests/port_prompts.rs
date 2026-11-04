@@ -34,6 +34,6 @@ fn non_empty_memory() {
     let memory = vec![json!({ "id": "1", "text": "existing memory" })];
     let result = get_update_memory_messages(&memory, &[json!("new fact")], None);
     assert!(result.contains("existing memory"));
-    assert!(result.contains("\"id\":\"1\""));
+    assert!(result.contains("\"id\": \"1\""));
     assert!(result.contains("current content of my memory"));
 }

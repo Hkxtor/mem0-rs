@@ -36,7 +36,62 @@ fn format_conversation_history(messages: &[(String, String)]) -> String {
 }
 
 fn serialize_memories(memories: &[Value]) -> String {
-    serde_json::to_string(memories).unwrap_or_else(|_| "[]".to_string())
+    // Byte-match Python's json.dumps(memories, ensure_ascii=False): ", " between items and
+    // ": " after keys. serde_json has no formatter flag for that — to_string is compact,
+    // to_string_pretty is indented — so the value is walked and emitted by hand.
+    py_json_dumps(&Value::Array(memories.to_vec())).unwrap_or_else(|| "[]".to_string())
+}
+
+/// Render a JSON value exactly like Python's `json.dumps(value, ensure_ascii=False)`.
+pub fn py_json_dumps(value: &Value) -> Option<String> {
+    let mut out = String::new();
+    write_py_json(value, &mut out);
+    Some(out)
+}
+
+fn write_py_json(value: &Value, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => out.push_str(&n.to_string()),
+        Value::String(s) => {
+            out.push('"');
+            for ch in s.chars() {
+                match ch {
+                    '"' => out.push_str("\\\""),
+                    '\\' => out.push_str("\\\\"),
+                    '\n' => out.push_str("\\n"),
+                    '\r' => out.push_str("\\r"),
+                    '\t' => out.push_str("\\t"),
+                    c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                    c => out.push(c),
+                }
+            }
+            out.push('"');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_py_json(item, out);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            for (i, (key, val)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write_py_json(&Value::String(key.clone()), out);
+                out.push_str(": ");
+                write_py_json(val, out);
+            }
+            out.push('}');
+        }
+    }
 }
 
 /// Arguments for [`generate_additive_extraction_prompt`].
@@ -98,13 +153,19 @@ pub fn generate_additive_extraction_prompt(args: &AdditivePromptArgs) -> String 
     }
 
     if args.use_input_language {
+        // Byte-identical to mem0's prompts.py (v2.2.1). The upstream port abbreviated this to
+        // four rules; the omitted ones are exactly the CJK / mixed-script cases.
         sections.push(
-            "## Language Requirement\n\
-             CRITICAL: Respond in the SAME LANGUAGE and SCRIPT as the input messages.\n\
-             1. Match the language of the user's messages exactly.\n\
-             2. Preserve the exact script/alphabet of the input.\n\
-             3. Do NOT translate or transliterate into English unless the input is English.\n\
-             4. Maintain all quality standards regardless of language."
+            r#"## Language Requirement
+CRITICAL: Respond in the SAME LANGUAGE and SCRIPT as the input messages.
+1. Match the language of the user's messages exactly — if they write in Korean, extract in Korean; Japanese in Japanese; etc.
+2. Preserve the exact script/alphabet of the input.
+3. Do NOT translate or transliterate into English unless the input is already in English.
+4. Maintain all quality standards (contextual richness, temporal grounding, etc.) regardless of language.
+5. Technical terms, proper nouns, and brand names should be preserved in their original form as used in the input.
+6. If the input mixes languages (e.g., Hinglish), preserve both the mixed language style AND the script.
+7. For Japanese: explicitly resolve omitted subjects using conversation context.
+8. For CJK languages: maintain appropriate formality level from the source text."#
                 .to_string(),
         );
     }

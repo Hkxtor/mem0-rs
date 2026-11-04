@@ -117,6 +117,9 @@ pub struct MemoryConfig {
     pub version: String,
     /// Optional custom fact-extraction instructions.
     pub custom_instructions: Option<String>,
+    /// When true, the extraction prompt carries the same-language requirement block.
+    /// Python mem0 defaults this to False but exposes it; the desktop product needs True.
+    pub use_input_language: bool,
 }
 
 impl Default for MemoryConfig {
@@ -129,6 +132,7 @@ impl Default for MemoryConfig {
             history_db_path: default_history_db_path(),
             version: "v1.1".to_string(),
             custom_instructions: None,
+            use_input_language: false,
         }
     }
 }
