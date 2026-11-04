@@ -28,8 +28,9 @@ impl GeminiLlm {
             .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
             .unwrap_or_default();
         let base = settings
-            .base_url
+            .gemini_base_url
             .clone()
+            .or_else(|| settings.base_url.clone())
             .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
         Ok(Self {
             client: reqwest::Client::new(),

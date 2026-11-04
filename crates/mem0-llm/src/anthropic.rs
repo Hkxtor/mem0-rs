@@ -28,8 +28,9 @@ impl AnthropicLlm {
             .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
             .unwrap_or_default();
         let base = settings
-            .base_url
+            .anthropic_base_url
             .clone()
+            .or_else(|| settings.base_url.clone())
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());
         Ok(Self {
             client: reqwest::Client::new(),

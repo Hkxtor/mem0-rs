@@ -41,9 +41,13 @@ pub struct LlmSettings {
     pub reasoning_effort: Option<String>,
     /// OpenAI / OpenAI-compatible base URL.
     pub openai_base_url: Option<String>,
+    /// Anthropic base URL (matches the Python SDK's `anthropic_base_url` key).
+    pub anthropic_base_url: Option<String>,
+    /// Gemini base URL (matches the Python SDK's `gemini_base_url` key).
+    pub gemini_base_url: Option<String>,
     /// Ollama base URL.
     pub ollama_base_url: Option<String>,
-    /// Generic base URL override (Anthropic/Gemini and testability).
+    /// Generic base URL override (fallback for Anthropic/Gemini and testability).
     pub base_url: Option<String>,
     /// Azure connection settings.
     #[serde(default)]
@@ -94,4 +98,28 @@ pub fn is_reasoning_model(model: &str) -> bool {
     ["o1-", "o1.", "o3-", "o3."]
         .iter()
         .any(|p| base.starts_with(p))
+}
+
+#[cfg(test)]
+mod base_url_key_tests {
+    use super::*;
+
+    #[test]
+    fn anthropic_base_url_key_is_recognized() {
+        let s = LlmSettings::from_value(&serde_json::json!({"anthropic_base_url": "https://proxy.local/v1"})).unwrap();
+        assert_eq!(s.anthropic_base_url.as_deref(), Some("https://proxy.local/v1"));
+    }
+
+    #[test]
+    fn gemini_base_url_key_is_recognized() {
+        let s = LlmSettings::from_value(&serde_json::json!({"gemini_base_url": "https://proxy.local"})).unwrap();
+        assert_eq!(s.gemini_base_url.as_deref(), Some("https://proxy.local"));
+    }
+
+    #[test]
+    fn generic_base_url_still_works_as_fallback() {
+        let s = LlmSettings::from_value(&serde_json::json!({"base_url": "https://generic.local"})).unwrap();
+        assert_eq!(s.base_url.as_deref(), Some("https://generic.local"));
+        assert!(s.anthropic_base_url.is_none());
+    }
 }
