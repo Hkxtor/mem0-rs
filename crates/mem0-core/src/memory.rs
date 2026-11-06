@@ -589,6 +589,26 @@ impl Memory {
         Ok(json!({ "results": results }))
     }
 
+    /// List every stored memory, unfiltered. Port of the server helper
+    /// `list_all_memories` (`vector_store.list(top_k=limit)`), which is what the
+    /// dashboard's Memories and Entities pages and the export endpoint read.
+    ///
+    /// `get_all` refuses to run without a scope key — correctly, it answers "what does
+    /// this user have". A dashboard listing everything is a different question, and it
+    /// is answered from the store directly in Python too.
+    pub async fn list_all(&self, top_k: usize) -> Result<Value> {
+        let hits = self.vector_store.list(&JsonMap::new(), Some(top_k)).await?;
+        let results: Vec<Value> = hits.iter().map(|h| format_memory_item(h, false)).collect();
+        Ok(json!({ "results": results }))
+    }
+
+    /// The vector store, for callers that need a raw listing (entities, export).
+    ///
+    /// Python's `Memory` exposes `self.vector_store`; this is the same handle.
+    pub fn vector_store(&self) -> &dyn VectorStore {
+        self.vector_store.as_ref()
+    }
+
     /// Search memories. Port of `search` + `_search_vector_store`.
     pub async fn search(
         &self,
