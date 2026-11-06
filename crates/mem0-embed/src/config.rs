@@ -64,13 +64,18 @@ mod base_url_key_tests {
 
     #[test]
     fn gemini_base_url_key_is_recognized() {
-        let s = EmbedderSettings::from_value(&serde_json::json!({"gemini_base_url": "https://proxy.local"})).unwrap();
+        let s = EmbedderSettings::from_value(
+            &serde_json::json!({"gemini_base_url": "https://proxy.local"}),
+        )
+        .unwrap();
         assert_eq!(s.gemini_base_url.as_deref(), Some("https://proxy.local"));
     }
 
     #[test]
     fn generic_base_url_still_works_as_fallback() {
-        let s = EmbedderSettings::from_value(&serde_json::json!({"base_url": "https://generic.local"})).unwrap();
+        let s =
+            EmbedderSettings::from_value(&serde_json::json!({"base_url": "https://generic.local"}))
+                .unwrap();
         assert_eq!(s.base_url.as_deref(), Some("https://generic.local"));
         assert!(s.gemini_base_url.is_none());
     }

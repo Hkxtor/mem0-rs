@@ -118,7 +118,10 @@ async fn anthropic_splits_system_and_parses_text() {
 async fn gemini_sets_json_mime_and_parses_text() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/v1beta/gemini-2.0-flash:generateContent"))
+        // `models/` is part of the model id in the REST path; without it the live API
+        // answers 404 with an empty body. This assertion used to pin the unqualified
+        // form, i.e. the bug.
+        .and(path("/v1beta/models/gemini-2.0-flash:generateContent"))
         .and(query_param("key", "g"))
         .and(body_partial_json(json!({
             "generationConfig": { "responseMimeType": "application/json" }
@@ -165,4 +168,22 @@ async fn mock_llm_returns_empty_additive() {
 #[tokio::test]
 async fn unknown_provider_errors() {
     assert!(build_llm("nope", &json!({})).is_err());
+}
+
+#[tokio::test]
+async fn gemini_qualifies_an_explicit_bare_model() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/gemini-2.5-flash:generateContent"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "candidates": [ { "content": { "parts": [ { "text": "ok" } ] } } ]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cfg =
+        json!({ "api_key": "g", "model": "gemini-2.5-flash", "gemini_base_url": server.uri() });
+    let llm = build_llm("gemini", &cfg).unwrap();
+    assert_eq!(llm.generate(&msgs(), &json_opts()).await.unwrap(), "ok");
 }

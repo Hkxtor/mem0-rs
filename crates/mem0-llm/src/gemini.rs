@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use mem0_core::error::{Mem0Error, Result};
 use mem0_core::traits::{GenerateOptions, Llm};
 use mem0_core::types::Message;
+use mem0_core::util::qualify_gemini_model;
 use serde_json::{json, Value};
 
 /// Gemini chat LLM over `…/v1beta/{model}:generateContent`.
@@ -36,10 +37,14 @@ impl GeminiLlm {
             client: reqwest::Client::new(),
             api_key,
             base_url: base.trim_end_matches('/').to_string(),
-            model: settings
-                .model
-                .clone()
-                .unwrap_or_else(|| "gemini-2.0-flash".to_string()),
+            // Same rule as the embedder: `…/v1beta/{model}:generateContent` needs a
+            // publisher-qualified model, and the SDK adds it for Python callers.
+            model: qualify_gemini_model(
+                &settings
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "gemini-2.0-flash".to_string()),
+            ),
             temperature: settings.temperature(),
             max_tokens: settings.max_tokens(),
             top_p: settings.top_p(),

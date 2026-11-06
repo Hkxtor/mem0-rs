@@ -5,6 +5,7 @@ use crate::http_error;
 use async_trait::async_trait;
 use mem0_core::error::{Mem0Error, Result};
 use mem0_core::traits::{Embedder, MemoryAction};
+use mem0_core::util::qualify_gemini_model;
 use serde::{Deserialize, Serialize};
 
 /// Gemini embedder over `…/v1beta/{model}:embedContent`.
@@ -56,10 +57,14 @@ impl GeminiEmbedder {
             .clone()
             .or_else(|| settings.base_url.clone())
             .unwrap_or_else(|| "https://generativelanguage.googleapis.com".to_string());
-        let model = settings
-            .model
-            .clone()
-            .unwrap_or_else(|| "models/gemini-embedding-001".to_string());
+        // A bare `gemini-embedding-001` is what an operator naturally types, and the
+        // SDK would qualify it; building the URL from it unqualified is an empty 404.
+        let model = qualify_gemini_model(
+            &settings
+                .model
+                .clone()
+                .unwrap_or_else(|| "models/gemini-embedding-001".to_string()),
+        );
         let dims = settings
             .embedding_dims
             .or(settings.output_dimensionality)
@@ -96,10 +101,21 @@ impl Embedder for GeminiEmbedder {
             .await
             .map_err(|e| http_error("Gemini embeddings request failed", e))?;
         if !resp.status().is_success() {
-            let code = resp.status();
+            let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            // An empty body means we never reached the API's error handling — usually a
+            // malformed path or the wrong host. Name the request (never the key) so the
+            // 404 is actionable instead of `HTTP 404 Not Found: `.
+            let detail = if body.trim().is_empty() {
+                format!(
+                    "(empty response body) for POST {}/v1beta/{}:embedContent",
+                    self.base_url, self.model
+                )
+            } else {
+                body
+            };
             return Err(Mem0Error::embedding(format!(
-                "Gemini embeddings HTTP {code}: {body}"
+                "Gemini embeddings HTTP {status}: {detail}"
             )));
         }
         let parsed: EmbedResponse = resp

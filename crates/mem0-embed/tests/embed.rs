@@ -137,3 +137,53 @@ async fn mock_embed_fixed_vector() {
 async fn unknown_provider_errors() {
     assert!(build_embedder("does-not-exist", &json!({})).is_err());
 }
+
+#[tokio::test]
+async fn gemini_embed_qualifies_a_bare_model_name() {
+    // Live API check: POST /v1beta/gemini-embedding-001:embedContent?key=… answers
+    // 404 with an empty body, while /v1beta/models/gemini-embedding-001:… reaches the
+    // real handler. The Python SDK qualifies the name for callers; we must too.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/gemini-embedding-001:embedContent"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "embedding": { "values": [0.4, 0.5] }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cfg = json!({
+        "api_key": "test-key",
+        "model": "gemini-embedding-001",
+        "gemini_base_url": server.uri(),
+        "embedding_dims": 768,
+    });
+    let embedder = build_embedder("gemini", &cfg).unwrap();
+    let v = embedder.embed("hi", MemoryAction::Add).await.unwrap();
+    assert_eq!(v, vec![0.4, 0.5]);
+}
+
+#[tokio::test]
+async fn gemini_embed_already_qualified_model_is_untouched() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/gemini-embedding-001:embedContent"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "embedding": { "values": [1.0] }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let cfg = json!({
+        "api_key": "k",
+        "model": "models/gemini-embedding-001",
+        "gemini_base_url": server.uri(),
+    });
+    let embedder = build_embedder("gemini", &cfg).unwrap();
+    assert_eq!(
+        embedder.embed("hi", MemoryAction::Add).await.unwrap(),
+        vec![1.0]
+    );
+}
