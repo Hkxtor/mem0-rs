@@ -46,6 +46,36 @@ pub struct AddOptions {
     pub memory_type: Option<String>,
     /// Custom extraction prompt / instructions.
     pub prompt: Option<String>,
+    /// Preserve an existing memory id (import path). `None` generates a fresh UUID,
+    /// exactly as before.
+    pub id: Option<String>,
+    /// Preserve the original creation timestamp (import path). `None` stamps now.
+    pub created_at: Option<String>,
+    /// Preserve the original update timestamp (import path). `None` falls back to
+    /// `created_at`, exactly as before.
+    pub updated_at: Option<String>,
+    /// Expiration date (YYYY-MM-DD). Stored in the payload; expired memories are hidden
+    /// from reads unless explicitly requested. Validation happens on use.
+    pub expiration_date: Option<String>,
+}
+
+/// Identity fields an importer wants preserved on the created record (id, timestamps).
+/// `None` anywhere means "generate/fill as before", so ordinary adds are unaffected.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RecordIdentity {
+    pub id: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+impl RecordIdentity {
+    pub(crate) fn from_opts(opts: &AddOptions) -> Self {
+        RecordIdentity {
+            id: opts.id.clone(),
+            created_at: opts.created_at.clone(),
+            updated_at: opts.updated_at.clone(),
+        }
+    }
 }
 
 /// Options for [`Memory::search`].
@@ -157,9 +187,10 @@ impl Memory {
         }
 
         let infer = opts.infer.unwrap_or(true);
+        let identity = RecordIdentity::from_opts(&opts);
         if !infer {
             return self
-                .add_to_vector_store_raw(&messages, &processed_metadata)
+                .add_to_vector_store_raw(&messages, &processed_metadata, &identity)
                 .await;
         }
 
@@ -168,6 +199,7 @@ impl Memory {
             &processed_metadata,
             &effective_filters,
             opts.prompt.as_deref(),
+            &identity,
         )
         .await
     }
@@ -177,6 +209,7 @@ impl Memory {
         &self,
         messages: &[Message],
         metadata: &JsonMap,
+        identity: &RecordIdentity,
     ) -> Result<Vec<AddResult>> {
         let mut returned = Vec::new();
         for message in messages {
@@ -190,7 +223,7 @@ impl Memory {
             }
 
             let mem_id = self
-                .create_memory(&message.content, None, per_msg_meta)
+                .create_memory(&message.content, None, per_msg_meta, Some(identity))
                 .await?;
 
             returned.push(AddResult {
@@ -212,6 +245,7 @@ impl Memory {
         metadata: &JsonMap,
         filters: &JsonMap,
         prompt: Option<&str>,
+        identity: &RecordIdentity,
     ) -> Result<Vec<AddResult>> {
         // Phase 0: context.
         let session_scope = build_session_scope(filters);
@@ -349,24 +383,37 @@ impl Memory {
             meta.insert("data".into(), json!(text));
             meta.insert("text_lemmatized".into(), json!(lemmatize_for_bm25(text)));
             meta.insert("hash".into(), json!(mem_hash));
-            let created = now_utc_rfc3339();
-            meta.entry("created_at").or_insert(json!(created));
+            // An imported id is only meaningful for a single produced record; with several
+            // extracted memories it would collide, so it is applied to the first record only.
+            if records.is_empty() {
+                if let Some(id) = &identity.id {
+                    meta.insert("__imported_id".into(), json!(id));
+                }
+            }
+            if let Some(ts) = &identity.created_at {
+                meta.insert("created_at".into(), json!(ts));
+            } else {
+                meta.entry("created_at").or_insert(json!(now_utc_rfc3339()));
+            }
             let created_at = meta
                 .get("created_at")
                 .and_then(|v| v.as_str())
-                .unwrap_or(&created)
-                .to_string();
-            meta.insert("updated_at".into(), json!(created_at));
+                .map(|s| s.to_string())
+                .unwrap_or_else(now_utc_rfc3339);
+            let updated_at = identity
+                .updated_at
+                .clone()
+                .unwrap_or_else(|| created_at.clone());
+            meta.insert("updated_at".into(), json!(updated_at));
             if let Some(att) = mem.get("attributed_to").and_then(|v| v.as_str()) {
                 meta.insert("attributed_to".into(), json!(att));
             }
 
-            records.push((
-                Uuid::new_v4().to_string(),
-                text.to_string(),
-                embedding,
-                meta,
-            ));
+            let id = meta
+                .remove("__imported_id")
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            records.push((id, text.to_string(), embedding, meta));
         }
 
         if records.is_empty() {
@@ -495,7 +542,7 @@ impl Memory {
         );
         let embedding = self.embedder.embed(&procedural, MemoryAction::Add).await?;
         let id = self
-            .create_memory(&procedural, Some(embedding), meta)
+            .create_memory(&procedural, Some(embedding), meta, None)
             .await?;
 
         Ok(vec![AddResult {
@@ -513,15 +560,20 @@ impl Memory {
         data: &str,
         precomputed: Option<Vec<f32>>,
         mut metadata: JsonMap,
+        identity: Option<&RecordIdentity>,
     ) -> Result<String> {
         let embeddings = match precomputed {
             Some(v) => v,
             None => self.embedder.embed(data, MemoryAction::Add).await?,
         };
-        let memory_id = Uuid::new_v4().to_string();
+        let memory_id = identity
+            .and_then(|i| i.id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         metadata.insert("data".into(), Value::String(data.to_string()));
         metadata.insert("hash".into(), Value::String(md5_hex(data)));
-        if !metadata.contains_key("created_at") {
+        if let Some(ts) = identity.and_then(|i| i.created_at.as_ref()) {
+            metadata.insert("created_at".into(), Value::String(ts.clone()));
+        } else if !metadata.contains_key("created_at") {
             metadata.insert("created_at".into(), Value::String(now_utc_rfc3339()));
         }
         let created_at = metadata
@@ -529,7 +581,10 @@ impl Memory {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        metadata.insert("updated_at".into(), Value::String(created_at.clone()));
+        let updated_at = identity
+            .and_then(|i| i.updated_at.clone())
+            .unwrap_or_else(|| created_at.clone());
+        metadata.insert("updated_at".into(), Value::String(updated_at));
         metadata.insert(
             "text_lemmatized".into(),
             Value::String(lemmatize_for_bm25(data)),

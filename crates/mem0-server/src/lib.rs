@@ -207,6 +207,7 @@ async fn add(
         infer: req.infer,
         memory_type: req.memory_type,
         prompt: req.prompt,
+        ..Default::default()
     };
     let results = st.memory.add(messages, opts).await?;
     Ok(Json(json!({ "results": results })))
