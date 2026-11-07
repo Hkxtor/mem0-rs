@@ -66,14 +66,16 @@ pub(crate) struct RecordIdentity {
     pub id: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub expiration_date: Option<String>,
 }
 
 impl RecordIdentity {
-    pub(crate) fn from_opts(opts: &AddOptions) -> Self {
+    pub(crate) fn from_opts(opts: &AddOptions, expiration: Option<String>) -> Self {
         RecordIdentity {
             id: opts.id.clone(),
             created_at: opts.created_at.clone(),
             updated_at: opts.updated_at.clone(),
+            expiration_date: expiration,
         }
     }
 }
@@ -162,6 +164,13 @@ impl Memory {
             None,
         )?;
 
+        // Normalize/validate expiration_date up front so both record paths just store it.
+        // Mirrors OSS `_normalize_expiration_date` (raises ValueError on bad input).
+        let expiration = match &opts.expiration_date {
+            Some(raw) => crate::util::normalize_expiration_date(&Value::String(raw.clone()))?,
+            None => None,
+        };
+
         if let Some(mt) = &opts.memory_type {
             if mt != MemoryType::Procedural.as_str() {
                 return Err(Mem0Error::validation_code(
@@ -187,7 +196,7 @@ impl Memory {
         }
 
         let infer = opts.infer.unwrap_or(true);
-        let identity = RecordIdentity::from_opts(&opts);
+        let identity = RecordIdentity::from_opts(&opts, expiration);
         if !infer {
             return self
                 .add_to_vector_store_raw(&messages, &processed_metadata, &identity)
@@ -405,6 +414,9 @@ impl Memory {
                 .clone()
                 .unwrap_or_else(|| created_at.clone());
             meta.insert("updated_at".into(), json!(updated_at));
+            if let Some(exp) = &identity.expiration_date {
+                meta.insert("expiration_date".into(), json!(exp));
+            }
             if let Some(att) = mem.get("attributed_to").and_then(|v| v.as_str()) {
                 meta.insert("attributed_to".into(), json!(att));
             }
@@ -585,6 +597,9 @@ impl Memory {
             .and_then(|i| i.updated_at.clone())
             .unwrap_or_else(|| created_at.clone());
         metadata.insert("updated_at".into(), Value::String(updated_at));
+        if let Some(exp) = identity.and_then(|i| i.expiration_date.as_ref()) {
+            metadata.insert("expiration_date".into(), Value::String(exp.clone()));
+        }
         metadata.insert(
             "text_lemmatized".into(),
             Value::String(lemmatize_for_bm25(data)),
@@ -639,8 +654,16 @@ impl Memory {
                 Some("Example: filters={\"user_id\": \"u1\"}".into()),
             ));
         }
-        let hits = self.vector_store.list(filters, Some(top_k)).await?;
-        let results: Vec<Value> = hits.iter().map(|h| format_memory_item(h, true)).collect();
+        // OSS fetches max(limit*4, 60) when hiding expired memories, filters, then truncates
+        // to the requested limit — mirror that so a few expired rows don't shrink the page.
+        let fetch_limit = std::cmp::max(top_k * 4, 60);
+        let hits = self.vector_store.list(filters, Some(fetch_limit)).await?;
+        let results: Vec<Value> = hits
+            .iter()
+            .filter(|h| !crate::util::payload_is_expired(&h.payload))
+            .take(top_k)
+            .map(|h| format_memory_item(h, true))
+            .collect();
         Ok(json!({ "results": results }))
     }
 
@@ -652,7 +675,28 @@ impl Memory {
     /// this user have". A dashboard listing everything is a different question, and it
     /// is answered from the store directly in Python too.
     pub async fn list_all(&self, top_k: usize) -> Result<Value> {
-        let hits = self.vector_store.list(&JsonMap::new(), Some(top_k)).await?;
+        let fetch_limit = std::cmp::max(top_k * 4, 60);
+        let hits = self
+            .vector_store
+            .list(&JsonMap::new(), Some(fetch_limit))
+            .await?;
+        let results: Vec<Value> = hits
+            .iter()
+            .filter(|h| !crate::util::payload_is_expired(&h.payload))
+            .take(top_k)
+            .map(|h| format_memory_item(h, false))
+            .collect();
+        Ok(json!({ "results": results }))
+    }
+
+    /// List every stored memory including expired ones. The server's export uses this
+    /// (Python's `list_all_memories` reads `vector_store.list` directly and never applies
+    /// the expiration filter — backups must not silently drop rows).
+    pub async fn list_all_include_expired(&self, top_k: usize) -> Result<Value> {
+        let hits = self
+            .vector_store
+            .list(&JsonMap::new(), Some(top_k))
+            .await?;
         let results: Vec<Value> = hits.iter().map(|h| format_memory_item(h, false)).collect();
         Ok(json!({ "results": results }))
     }
@@ -793,6 +837,10 @@ impl Memory {
                 .map(|s| !s.is_empty())
                 .unwrap_or(false);
             if !has_data {
+                continue;
+            }
+            // OSS drops expired memories from search candidates before scoring.
+            if crate::util::payload_is_expired(&hit.payload) {
                 continue;
             }
             out.push(format_memory_item(&hit, false));
@@ -1230,6 +1278,12 @@ pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value 
     if let Some(u) = payload.get("updated_at") {
         item.insert("updated_at".into(), u.clone());
     }
+    // Official exports always carry this key (null when unset); mirror that shape so an
+    // export from either side diffs cleanly. Kept out of `metadata` below.
+    item.insert(
+        "expiration_date".into(),
+        payload.get("expiration_date").cloned().unwrap_or(Value::Null),
+    );
     if !exclude_score && hit.score != 0.0 {
         item.insert("score".into(), json!(hit.score));
     }
@@ -1240,7 +1294,7 @@ pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value 
         }
     }
 
-    let core_and_promoted: [&str; 8] = [
+    let core_and_promoted: [&str; 9] = [
         "data",
         "hash",
         "created_at",
@@ -1249,6 +1303,7 @@ pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value 
         "text_lemmatized",
         "attributed_to",
         "score",
+        "expiration_date",
     ];
     let mut additional = Map::new();
     for (k, v) in payload {
