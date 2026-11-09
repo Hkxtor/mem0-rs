@@ -1258,6 +1258,12 @@ fn parse_memory_array(cleaned: &str) -> Vec<Value> {
 
 /// Format a [`SearchHit`] into the public memory-item shape.
 /// Port of the `MemoryItem(...).model_dump()` + promotion logic.
+/// Public wrapper for integration tests: format a hit into the API item shape.
+#[doc(hidden)]
+pub fn format_memory_item_for_test(hit: &SearchHit, exclude_score: bool) -> Value {
+    format_memory_item(hit, exclude_score)
+}
+
 pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value {
     let payload = &hit.payload;
     let mut item = Map::new();
@@ -1284,6 +1290,12 @@ pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value 
         "expiration_date".into(),
         payload.get("expiration_date").cloned().unwrap_or(Value::Null),
     );
+    // Categories are a top-level array on official exports too; default to [] so every
+    // item has a stable shape. Kept out of `metadata` below.
+    item.insert(
+        "categories".into(),
+        payload.get("categories").cloned().unwrap_or_else(|| json!([])),
+    );
     if !exclude_score && hit.score != 0.0 {
         item.insert("score".into(), json!(hit.score));
     }
@@ -1294,7 +1306,7 @@ pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value 
         }
     }
 
-    let core_and_promoted: [&str; 9] = [
+    let core_and_promoted: [&str; 10] = [
         "data",
         "hash",
         "created_at",
@@ -1304,6 +1316,7 @@ pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value 
         "attributed_to",
         "score",
         "expiration_date",
+        "categories",
     ];
     let mut additional = Map::new();
     for (k, v) in payload {
