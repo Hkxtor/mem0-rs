@@ -689,6 +689,21 @@ impl Memory {
         Ok(json!({ "results": results }))
     }
 
+    /// Like [`Self::list_all`] but applies `filters` without requiring a scope key
+    /// (`get_all` demands user_id/agent_id/run_id; the dashboard's category-only filter
+    /// has none). Same expiration semantics: expired rows are hidden.
+    pub async fn list_all_filtered(&self, filters: &JsonMap, top_k: usize) -> Result<Value> {
+        let fetch_limit = std::cmp::max(top_k * 4, 60);
+        let hits = self.vector_store.list(filters, Some(fetch_limit)).await?;
+        let results: Vec<Value> = hits
+            .iter()
+            .filter(|h| !crate::util::payload_is_expired(&h.payload))
+            .take(top_k)
+            .map(|h| format_memory_item(h, false))
+            .collect();
+        Ok(json!({ "results": results }))
+    }
+
     /// List every stored memory including expired ones. The server's export uses this
     /// (Python's `list_all_memories` reads `vector_store.list` directly and never applies
     /// the expiration filter — backups must not silently drop rows).
