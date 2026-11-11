@@ -37,11 +37,11 @@ fn categories_defaults_to_empty_array() {
 
 #[tokio::test]
 async fn list_all_filtered_applies_categories_without_scope() {
+    use mem0_core::config::MemoryConfig;
     use mem0_core::testing::MockEmbedder;
     use mem0_core::testing::MockLlm;
-    use mem0_core::Memory;
-    use mem0_core::config::MemoryConfig;
     use mem0_core::types::JsonMap;
+    use mem0_core::Memory;
     use serde_json::json;
 
     let store = Box::new(mem0_core::testing::InMemoryVectorStore::new());
@@ -61,8 +61,16 @@ async fn list_all_filtered_applies_categories_without_scope() {
         p
     };
     let hits = vec![
-        mem0_core::types::SearchHit { id: "a".into(), score: 0.0, payload: mk("a", json!(["food"])) },
-        mem0_core::types::SearchHit { id: "b".into(), score: 0.0, payload: mk("b", json!(["food", "travel"])) },
+        mem0_core::types::SearchHit {
+            id: "a".into(),
+            score: 0.0,
+            payload: mk("a", json!(["food"])),
+        },
+        mem0_core::types::SearchHit {
+            id: "b".into(),
+            score: 0.0,
+            payload: mk("b", json!(["food", "travel"])),
+        },
     ];
     // insert via the store trait directly
     for h in hits {
@@ -79,7 +87,12 @@ async fn list_all_filtered_applies_categories_without_scope() {
     let mut filters = JsonMap::new();
     filters.insert("categories".into(), json!(["food", "travel"]));
     let out = mem.list_all_filtered(&filters, 10).await.unwrap();
-    let ids: Vec<&str> = out["results"].as_array().unwrap().iter().map(|r| r["id"].as_str().unwrap()).collect();
+    let ids: Vec<&str> = out["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
     assert_eq!(ids, vec!["b"], "AND filter without scope: {ids:?}");
 
     // no filters at all still works (regression for plain list)

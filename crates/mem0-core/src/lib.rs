@@ -7,6 +7,7 @@
 //! providers live in sibling crates and are injected into [`Memory`].
 
 pub mod config;
+pub mod diagnostics;
 pub mod enums;
 pub mod error;
 pub mod filters;

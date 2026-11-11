@@ -22,19 +22,19 @@ pub fn now_utc_rfc3339() -> String {
 /// Normalize an `expiration_date` input to `YYYY-MM-DD`, mirroring OSS
 /// `_normalize_expiration_date`: strings must parse as an ISO date; anything else
 /// is a validation error with the same message the Python SDK raises.
-pub fn normalize_expiration_date(value: &serde_json::Value) -> Result<Option<String>, crate::error::Mem0Error> {
+pub fn normalize_expiration_date(
+    value: &serde_json::Value,
+) -> Result<Option<String>, crate::error::Mem0Error> {
     match value {
         serde_json::Value::Null => Ok(None),
-        serde_json::Value::String(s) => {
-            match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-                Ok(d) => Ok(Some(d.to_string())),
-                Err(_) => Err(crate::error::Mem0Error::validation_code(
-                    "VALIDATION_003",
-                    "expiration_date must be a valid date in YYYY-MM-DD format.".to_string(),
-                    Some("Pass a date string like \"2026-12-31\".".to_string()),
-                )),
-            }
-        }
+        serde_json::Value::String(s) => match chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+            Ok(d) => Ok(Some(d.to_string())),
+            Err(_) => Err(crate::error::Mem0Error::validation_code(
+                "VALIDATION_003",
+                "expiration_date must be a valid date in YYYY-MM-DD format.".to_string(),
+                Some("Pass a date string like \"2026-12-31\".".to_string()),
+            )),
+        },
         _ => Err(crate::error::Mem0Error::validation_code(
             "VALIDATION_003",
             "expiration_date must be a date string in YYYY-MM-DD format.".to_string(),
@@ -78,7 +78,10 @@ mod tests {
 
     #[test]
     fn expiration_date_normalizes_to_iso_date() {
-        assert_eq!(normalize_expiration_date(&serde_json::Value::Null).unwrap(), None);
+        assert_eq!(
+            normalize_expiration_date(&serde_json::Value::Null).unwrap(),
+            None
+        );
         assert_eq!(
             normalize_expiration_date(&serde_json::json!("2026-12-31")).unwrap(),
             Some("2026-12-31".to_string())
@@ -97,17 +100,32 @@ mod tests {
         let tomorrow = today + chrono::Duration::days(1);
         let mut payload = crate::types::JsonMap::new();
 
-        payload.insert("expiration_date".into(), serde_json::json!(yesterday.to_string()));
+        payload.insert(
+            "expiration_date".into(),
+            serde_json::json!(yesterday.to_string()),
+        );
         assert!(payload_is_expired(&payload), "yesterday must be expired");
 
-        payload.insert("expiration_date".into(), serde_json::json!(today.to_string()));
-        assert!(!payload_is_expired(&payload), "expiring today is still valid");
+        payload.insert(
+            "expiration_date".into(),
+            serde_json::json!(today.to_string()),
+        );
+        assert!(
+            !payload_is_expired(&payload),
+            "expiring today is still valid"
+        );
 
-        payload.insert("expiration_date".into(), serde_json::json!(tomorrow.to_string()));
+        payload.insert(
+            "expiration_date".into(),
+            serde_json::json!(tomorrow.to_string()),
+        );
         assert!(!payload_is_expired(&payload), "tomorrow is valid");
 
         payload.insert("expiration_date".into(), serde_json::json!("garbage"));
-        assert!(!payload_is_expired(&payload), "unparseable stored value is not expired (OSS parity)");
+        assert!(
+            !payload_is_expired(&payload),
+            "unparseable stored value is not expired (OSS parity)"
+        );
 
         payload.remove("expiration_date");
         assert!(!payload_is_expired(&payload));

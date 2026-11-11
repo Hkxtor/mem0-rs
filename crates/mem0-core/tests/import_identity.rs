@@ -49,7 +49,10 @@ async fn raw_add_without_identity_generates_id_and_stamps_now() {
     assert_eq!(res[0].id.len(), 36);
 
     let all = mem
-        .get_all(&json!({"user_id": "alice"}).as_object().unwrap().clone(), 10)
+        .get_all(
+            &json!({"user_id": "alice"}).as_object().unwrap().clone(),
+            10,
+        )
         .await
         .unwrap();
     let item = &all["results"][0];
@@ -81,7 +84,10 @@ async fn raw_add_with_identity_preserves_id_and_timestamps() {
     assert_eq!(res[0].id, "aac45e70-56d5-4d79-9d0b-df736d7ef129");
 
     let all = mem
-        .get_all(&json!({"user_id": "alice"}).as_object().unwrap().clone(), 10)
+        .get_all(
+            &json!({"user_id": "alice"}).as_object().unwrap().clone(),
+            10,
+        )
         .await
         .unwrap();
     let item = &all["results"][0];
@@ -115,7 +121,10 @@ async fn infer_add_ignores_identity_for_multiple_records_but_keeps_timestamps() 
         created_at: Some("2026-01-01T00:00:00+00:00".into()),
         ..Default::default()
     };
-    let res = mem.add("Hi, I'm John and I love hiking", opts).await.unwrap();
+    let res = mem
+        .add("Hi, I'm John and I love hiking", opts)
+        .await
+        .unwrap();
     assert_eq!(res.len(), 2);
     // Two records: the imported id may only land on one of them, the other gets a UUID.
     let ids: Vec<&str> = res.iter().map(|r| r.id.as_str()).collect();

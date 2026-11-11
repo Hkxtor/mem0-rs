@@ -316,22 +316,51 @@ impl Memory {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("LLM extraction failed: {e}");
+                // Swallowed on purpose: a failed extraction must not fail the add. The
+                // reason is recorded so the caller can explain the empty result.
+                crate::diagnostics::record(
+                    crate::diagnostics::Stage::LlmError,
+                    "",
+                    0,
+                    Some(e.to_string()),
+                );
                 return Ok(vec![]);
             }
         };
 
-        // Parse the extraction response.
+        // Parse the extraction response. Three outcomes, and the caller is told which:
+        // the model answered "nothing to remember", the answer could not be parsed, or
+        // there was an answer at all.
         let cleaned = remove_code_blocks(&response);
         let extracted: Vec<Value> = if cleaned.trim().is_empty() {
-            vec![]
-        } else {
-            parse_memory_array(&cleaned)
-        };
-
-        if extracted.is_empty() {
+            crate::diagnostics::record(crate::diagnostics::Stage::EmptyAnswer, &response, 0, None);
             let _ = self.db.save_messages(messages, &session_scope);
             return Ok(vec![]);
-        }
+        } else {
+            match parse_memory_array(&cleaned) {
+                Some(arr) if arr.is_empty() => {
+                    crate::diagnostics::record(
+                        crate::diagnostics::Stage::EmptyAnswer,
+                        &response,
+                        0,
+                        None,
+                    );
+                    let _ = self.db.save_messages(messages, &session_scope);
+                    return Ok(vec![]);
+                }
+                Some(arr) => arr,
+                None => {
+                    crate::diagnostics::record(
+                        crate::diagnostics::Stage::Unparsed,
+                        &response,
+                        0,
+                        None,
+                    );
+                    let _ = self.db.save_messages(messages, &session_scope);
+                    return Ok(vec![]);
+                }
+            }
+        };
 
         // Phase 3: batch embed extracted texts.
         let mem_texts: Vec<String> = extracted
@@ -708,10 +737,7 @@ impl Memory {
     /// (Python's `list_all_memories` reads `vector_store.list` directly and never applies
     /// the expiration filter — backups must not silently drop rows).
     pub async fn list_all_include_expired(&self, top_k: usize) -> Result<Value> {
-        let hits = self
-            .vector_store
-            .list(&JsonMap::new(), Some(top_k))
-            .await?;
+        let hits = self.vector_store.list(&JsonMap::new(), Some(top_k)).await?;
         let results: Vec<Value> = hits.iter().map(|h| format_memory_item(h, false)).collect();
         Ok(json!({ "results": results }))
     }
@@ -1255,20 +1281,23 @@ impl Memory {
 }
 
 /// Parse a `{"memory": [...]}` array from cleaned LLM output, with an
-/// `extract_json` fallback. Returns `[]` on failure.
-fn parse_memory_array(cleaned: &str) -> Vec<Value> {
+/// `extract_json` fallback.
+///
+/// `None` means no `memory` array could be found in the answer — a parse failure, which is
+/// a different event from a model that legitimately answered `{"memory": []}`.
+fn parse_memory_array(cleaned: &str) -> Option<Vec<Value>> {
     if let Ok(v) = serde_json::from_str::<Value>(cleaned) {
         if let Some(arr) = v.get("memory").and_then(|m| m.as_array()) {
-            return arr.clone();
+            return Some(arr.clone());
         }
     }
     let ej = extract_json(cleaned);
     if let Ok(v) = serde_json::from_str::<Value>(&ej) {
         if let Some(arr) = v.get("memory").and_then(|m| m.as_array()) {
-            return arr.clone();
+            return Some(arr.clone());
         }
     }
-    vec![]
+    None
 }
 
 /// Format a [`SearchHit`] into the public memory-item shape.
@@ -1303,13 +1332,19 @@ pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value 
     // export from either side diffs cleanly. Kept out of `metadata` below.
     item.insert(
         "expiration_date".into(),
-        payload.get("expiration_date").cloned().unwrap_or(Value::Null),
+        payload
+            .get("expiration_date")
+            .cloned()
+            .unwrap_or(Value::Null),
     );
     // Categories are a top-level array on official exports too; default to [] so every
     // item has a stable shape. Kept out of `metadata` below.
     item.insert(
         "categories".into(),
-        payload.get("categories").cloned().unwrap_or_else(|| json!([])),
+        payload
+            .get("categories")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
     );
     if !exclude_score && hit.score != 0.0 {
         item.insert("score".into(), json!(hit.score));

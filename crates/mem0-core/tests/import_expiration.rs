@@ -58,9 +58,15 @@ async fn expired_memory_is_hidden_from_list_and_search_but_stays_in_the_store() 
     let yesterday = (chrono::Utc::now().date_naive() - chrono::Duration::days(1)).to_string();
     let tomorrow = (chrono::Utc::now().date_naive() + chrono::Duration::days(1)).to_string();
 
-    mem.add(msg("old fact"), raw("alice", Some(&yesterday))).await.unwrap();
-    mem.add(msg("fresh fact"), raw("alice", Some(&tomorrow))).await.unwrap();
-    mem.add(msg("timeless fact"), raw("alice", None)).await.unwrap();
+    mem.add(msg("old fact"), raw("alice", Some(&yesterday)))
+        .await
+        .unwrap();
+    mem.add(msg("fresh fact"), raw("alice", Some(&tomorrow)))
+        .await
+        .unwrap();
+    mem.add(msg("timeless fact"), raw("alice", None))
+        .await
+        .unwrap();
 
     // list/get_all hide the expired one
     let all = mem.get_all(&scope("alice"), 100).await.unwrap();
@@ -95,7 +101,11 @@ async fn expired_memory_is_hidden_from_list_and_search_but_stays_in_the_store() 
 
     // ...but the raw store still holds it (export reads list_all which also hides it;
     // the store itself is the source of truth for export-with-expired — see app tests).
-    let raw_hits = mem.vector_store().list(&JsonMap::new(), Some(100)).await.unwrap();
+    let raw_hits = mem
+        .vector_store()
+        .list(&JsonMap::new(), Some(100))
+        .await
+        .unwrap();
     assert_eq!(raw_hits.len(), 3, "store keeps the expired row");
 }
 
@@ -103,21 +113,37 @@ async fn expired_memory_is_hidden_from_list_and_search_but_stays_in_the_store() 
 async fn formatted_items_always_carry_expiration_date() {
     let mem = memory();
     let tomorrow = (chrono::Utc::now().date_naive() + chrono::Duration::days(1)).to_string();
-    mem.add(msg("dated fact"), raw("alice", Some(&tomorrow))).await.unwrap();
-    mem.add(msg("undated fact"), raw("alice", None)).await.unwrap();
+    mem.add(msg("dated fact"), raw("alice", Some(&tomorrow)))
+        .await
+        .unwrap();
+    mem.add(msg("undated fact"), raw("alice", None))
+        .await
+        .unwrap();
 
     let all = mem.get_all(&scope("alice"), 100).await.unwrap();
     let rows = all["results"].as_array().unwrap();
     for row in rows {
-        assert!(row.as_object().unwrap().contains_key("expiration_date"), "{row}");
+        assert!(
+            row.as_object().unwrap().contains_key("expiration_date"),
+            "{row}"
+        );
         // and it must not leak into the metadata bucket
         if let Some(md) = row.get("metadata") {
-            assert!(!md.as_object().unwrap().contains_key("expiration_date"), "{row}");
+            assert!(
+                !md.as_object().unwrap().contains_key("expiration_date"),
+                "{row}"
+            );
         }
     }
-    let dated = rows.iter().find(|r| r["memory"] == json!("dated fact")).unwrap();
+    let dated = rows
+        .iter()
+        .find(|r| r["memory"] == json!("dated fact"))
+        .unwrap();
     assert_eq!(dated["expiration_date"], json!(tomorrow));
-    let undated = rows.iter().find(|r| r["memory"] == json!("undated fact")).unwrap();
+    let undated = rows
+        .iter()
+        .find(|r| r["memory"] == json!("undated fact"))
+        .unwrap();
     assert_eq!(undated["expiration_date"], Value::Null);
 }
 
@@ -125,7 +151,9 @@ async fn formatted_items_always_carry_expiration_date() {
 async fn expiring_today_is_still_valid() {
     let mem = memory();
     let today = chrono::Utc::now().date_naive().to_string();
-    mem.add(msg("today fact"), raw("alice", Some(&today))).await.unwrap();
+    mem.add(msg("today fact"), raw("alice", Some(&today)))
+        .await
+        .unwrap();
     let all = mem.get_all(&scope("alice"), 100).await.unwrap();
     assert_eq!(all["results"].as_array().unwrap().len(), 1, "{all}");
 }
