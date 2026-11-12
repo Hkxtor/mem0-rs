@@ -187,3 +187,82 @@ async fn gemini_qualifies_an_explicit_bare_model() {
     let llm = build_llm("gemini", &cfg).unwrap();
     assert_eq!(llm.generate(&msgs(), &json_opts()).await.unwrap(), "ok");
 }
+
+/// A caller that pools credentials has to tell "this key is out of quota" from "this key is
+/// wrong" from "the upstream is broken", and it cannot do that from a message string. The
+/// status and the upstream's `Retry-After` therefore have to survive the failed response.
+#[tokio::test]
+async fn a_rate_limited_response_keeps_its_status_and_retry_after() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "17")
+                .set_body_string(r#"{"error":{"message":"Rate limit reached"}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let llm = build_llm(
+        "openai",
+        &json!({"api_key": "k", "openai_base_url": server.uri(), "model": "gpt-4o"}),
+    )
+    .expect("build");
+    let err = llm
+        .generate(&msgs(), &GenerateOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.http_status(), Some(429));
+    assert_eq!(err.retry_after_secs(), Some(17));
+    // The text an operator already reads is unchanged.
+    assert!(err.to_string().contains("OpenAI chat HTTP 429"), "{err}");
+    assert!(err.to_string().contains("Rate limit reached"), "{err}");
+}
+
+/// A rejected credential is a different problem from a rate limit and must be reported as
+/// such: waiting will never fix a 401.
+#[tokio::test]
+async fn a_rejected_credential_keeps_its_status() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(401).set_body_string(r#"{"error":"bad key"}"#))
+        .mount(&server)
+        .await;
+
+    let llm = build_llm(
+        "openai",
+        &json!({"api_key": "k", "openai_base_url": server.uri(), "model": "gpt-4o"}),
+    )
+    .expect("build");
+    let err = llm
+        .generate(&msgs(), &GenerateOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.http_status(), Some(401));
+    assert_eq!(err.retry_after_secs(), None);
+}
+
+/// Without a `Retry-After`, the status still has to come through: the caller then applies
+/// its own default wait.
+#[tokio::test]
+async fn a_status_without_retry_after_still_survives() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("upstream down"))
+        .mount(&server)
+        .await;
+
+    let llm = build_llm(
+        "anthropic",
+        &json!({"api_key": "k", "anthropic_base_url": server.uri(), "model": "claude-haiku-4-5"}),
+    )
+    .expect("build");
+    let err = llm
+        .generate(&msgs(), &GenerateOptions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(err.http_status(), Some(503));
+}

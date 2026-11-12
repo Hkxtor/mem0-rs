@@ -187,3 +187,32 @@ async fn gemini_embed_already_qualified_model_is_untouched() {
         vec![1.0]
     );
 }
+
+/// The embedder is the section that hits quota first (a single import fans one text per
+/// chunk), so a rate-limited embedding has to keep its status and `Retry-After` too.
+#[tokio::test]
+async fn a_rate_limited_embedding_keeps_its_status_and_retry_after() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "3")
+                .set_body_string(r#"{"error":{"message":"quota"}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let embedder = build_embedder(
+        "openai",
+        &json!({"api_key": "k", "openai_base_url": server.uri(), "model": "text-embedding-3-small"}),
+    )
+    .expect("build");
+    let err = embedder
+        .embed("hello", MemoryAction::Add)
+        .await
+        .unwrap_err();
+    assert_eq!(err.http_status(), Some(429));
+    assert_eq!(err.retry_after_secs(), Some(3));
+    assert_eq!(err.code(), Some("EMBED_001"));
+}

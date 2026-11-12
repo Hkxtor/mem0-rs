@@ -88,6 +88,23 @@ pub enum Mem0Error {
         message: String,
         suggestion: Option<String>,
     },
+    /// An upstream answered with a status that was not a success.
+    ///
+    /// Exists so a caller that pools credentials can act on the status — park a key that
+    /// was rate limited, retire one whose credential was rejected — without parsing the
+    /// message, which also means `Retry-After` survives instead of being dropped with the
+    /// response. `Display` matches [`Mem0Error::Llm`] / [`Mem0Error::Embedding`] exactly,
+    /// so nothing that only reads the text sees a difference.
+    #[error("[{code}] {message}")]
+    Http {
+        code: String,
+        message: String,
+        suggestion: Option<String>,
+        /// The upstream HTTP status, e.g. `429`.
+        status: u16,
+        /// The upstream's `Retry-After` in seconds, when it sent a usable one.
+        retry_after: Option<u64>,
+    },
     /// JSON (de)serialization error.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
@@ -110,7 +127,8 @@ impl Mem0Error {
             | Mem0Error::Embedding { code, .. }
             | Mem0Error::Llm { code, .. }
             | Mem0Error::Database { code, .. }
-            | Mem0Error::Dependency { code, .. } => Some(code),
+            | Mem0Error::Dependency { code, .. }
+            | Mem0Error::Http { code, .. } => Some(code),
             _ => None,
         }
     }
@@ -178,6 +196,52 @@ impl Mem0Error {
         }
     }
 
+    /// Build an LLM error carrying the upstream status.
+    ///
+    /// Same code and message shape as [`Mem0Error::llm`], so the text an operator already
+    /// sees does not change; the status and `Retry-After` ride along for callers that need
+    /// them.
+    pub fn llm_http(status: u16, retry_after: Option<u64>, message: impl Into<String>) -> Self {
+        Mem0Error::Http {
+            code: "LLM_001".into(),
+            message: message.into(),
+            suggestion: Some("Please check your LLM configuration and API key".into()),
+            status,
+            retry_after,
+        }
+    }
+
+    /// Build an embedding error carrying the upstream status. See [`Mem0Error::llm_http`].
+    pub fn embedding_http(
+        status: u16,
+        retry_after: Option<u64>,
+        message: impl Into<String>,
+    ) -> Self {
+        Mem0Error::Http {
+            code: "EMBED_001".into(),
+            message: message.into(),
+            suggestion: Some("Please check your embedding model configuration".into()),
+            status,
+            retry_after,
+        }
+    }
+
+    /// The upstream status, when this error came from an unsuccessful HTTP response.
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Mem0Error::Http { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+
+    /// The upstream's requested wait, in seconds, when it sent one.
+    pub fn retry_after_secs(&self) -> Option<u64> {
+        match self {
+            Mem0Error::Http { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
+
     /// Build a database error.
     pub fn database(message: impl Into<String>) -> Self {
         Mem0Error::Database {
@@ -185,5 +249,54 @@ impl Mem0Error {
             message: message.into(),
             suggestion: Some("Please check your database configuration and connection".into()),
         }
+    }
+}
+
+/// Seconds from a `Retry-After` header value.
+///
+/// The header allows either a delay in seconds or an HTTP date. Only the numeric form is
+/// honoured: a date would mean carrying an HTTP-date parser for a value that is almost
+/// always a number, and the caller has a sane default when this returns `None`.
+pub fn parse_retry_after(value: Option<&str>) -> Option<u64> {
+    value?.trim().parse::<u64>().ok()
+}
+
+#[cfg(test)]
+mod http_status_tests {
+    use super::*;
+
+    #[test]
+    fn a_status_survives_the_conversion_and_display_is_unchanged() {
+        let e = Mem0Error::llm_http(
+            429,
+            Some(7),
+            "OpenAI chat HTTP 429 Too Many Requests: slow down",
+        );
+        assert_eq!(e.http_status(), Some(429));
+        assert_eq!(e.retry_after_secs(), Some(7));
+        assert_eq!(e.code(), Some("LLM_001"));
+        assert_eq!(
+            e.to_string(),
+            "[LLM_001] OpenAI chat HTTP 429 Too Many Requests: slow down"
+        );
+        // A plain llm() error carries no status: it did not come from a response.
+        assert_eq!(Mem0Error::llm("boom").http_status(), None);
+        assert_eq!(
+            Mem0Error::embedding_http(401, None, "nope").code(),
+            Some("EMBED_001")
+        );
+    }
+
+    #[test]
+    fn retry_after_reads_seconds_and_ignores_everything_else() {
+        assert_eq!(parse_retry_after(Some("30")), Some(30));
+        assert_eq!(parse_retry_after(Some(" 0 ")), Some(0));
+        // An HTTP date is not a delay we can use without a date parser.
+        assert_eq!(
+            parse_retry_after(Some("Wed, 21 Oct 2015 07:28:00 GMT")),
+            None
+        );
+        assert_eq!(parse_retry_after(Some("-5")), None);
+        assert_eq!(parse_retry_after(None), None);
     }
 }

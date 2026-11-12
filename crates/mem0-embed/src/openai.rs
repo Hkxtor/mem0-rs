@@ -110,11 +110,14 @@ impl OpenAiEmbedder {
             .await
             .map_err(|e| http_error("OpenAI embeddings request failed", e))?;
         if !resp.status().is_success() {
-            let code = resp.status();
+            let status = resp.status();
+            let retry_after = retry_after(&resp);
             let body = resp.text().await.unwrap_or_default();
-            return Err(Mem0Error::embedding(format!(
-                "OpenAI embeddings HTTP {code}: {body}"
-            )));
+            return Err(Mem0Error::embedding_http(
+                status.as_u16(),
+                retry_after,
+                format!("OpenAI embeddings HTTP {status}: {body}"),
+            ));
         }
         let mut parsed: EmbedResponse = resp
             .json()
@@ -147,4 +150,13 @@ impl Embedder for OpenAiEmbedder {
     fn dims(&self) -> usize {
         self.dims
     }
+}
+
+/// The upstream's `Retry-After`, in seconds, when it sent one.
+fn retry_after(resp: &reqwest::Response) -> Option<u64> {
+    mem0_core::error::parse_retry_after(
+        resp.headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+    )
 }

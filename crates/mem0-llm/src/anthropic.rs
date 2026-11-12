@@ -89,9 +89,14 @@ impl Llm for AnthropicLlm {
             .await
             .map_err(|e| http_error("Anthropic request failed", e))?;
         if !resp.status().is_success() {
-            let code = resp.status();
+            let status = resp.status();
+            let retry_after = retry_after(&resp);
             let text = resp.text().await.unwrap_or_default();
-            return Err(Mem0Error::llm(format!("Anthropic HTTP {code}: {text}")));
+            return Err(Mem0Error::llm_http(
+                status.as_u16(),
+                retry_after,
+                format!("Anthropic HTTP {status}: {text}"),
+            ));
         }
         let value: Value = resp
             .json()
@@ -106,4 +111,13 @@ impl Llm for AnthropicLlm {
             .to_string();
         Ok(content)
     }
+}
+
+/// The upstream's `Retry-After`, in seconds, when it sent one.
+fn retry_after(resp: &reqwest::Response) -> Option<u64> {
+    mem0_core::error::parse_retry_after(
+        resp.headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+    )
 }

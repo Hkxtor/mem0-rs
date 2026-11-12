@@ -129,9 +129,14 @@ impl Llm for AzureLlm {
             .await
             .map_err(|e| http_error("Azure chat request failed", e))?;
         if !resp.status().is_success() {
-            let code = resp.status();
+            let status = resp.status();
+            let retry_after = retry_after(&resp);
             let text = resp.text().await.unwrap_or_default();
-            return Err(Mem0Error::llm(format!("Azure chat HTTP {code}: {text}")));
+            return Err(Mem0Error::llm_http(
+                status.as_u16(),
+                retry_after,
+                format!("Azure chat HTTP {status}: {text}"),
+            ));
         }
         let value: Value = resp
             .json()
@@ -139,4 +144,13 @@ impl Llm for AzureLlm {
             .map_err(|e| http_error("Azure chat decode failed", e))?;
         Ok(extract_chat_content(&value))
     }
+}
+
+/// The upstream's `Retry-After`, in seconds, when it sent one.
+fn retry_after(resp: &reqwest::Response) -> Option<u64> {
+    mem0_core::error::parse_retry_after(
+        resp.headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+    )
 }

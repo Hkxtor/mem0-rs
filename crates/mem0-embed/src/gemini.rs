@@ -102,6 +102,7 @@ impl Embedder for GeminiEmbedder {
             .map_err(|e| http_error("Gemini embeddings request failed", e))?;
         if !resp.status().is_success() {
             let status = resp.status();
+            let retry_after = retry_after(&resp);
             let body = resp.text().await.unwrap_or_default();
             // An empty body means we never reached the API's error handling — usually a
             // malformed path or the wrong host. Name the request (never the key) so the
@@ -114,9 +115,11 @@ impl Embedder for GeminiEmbedder {
             } else {
                 body
             };
-            return Err(Mem0Error::embedding(format!(
-                "Gemini embeddings HTTP {status}: {detail}"
-            )));
+            return Err(Mem0Error::embedding_http(
+                status.as_u16(),
+                retry_after,
+                format!("Gemini embeddings HTTP {status}: {detail}"),
+            ));
         }
         let parsed: EmbedResponse = resp
             .json()
@@ -128,4 +131,13 @@ impl Embedder for GeminiEmbedder {
     fn dims(&self) -> usize {
         self.dims
     }
+}
+
+/// The upstream's `Retry-After`, in seconds, when it sent one.
+fn retry_after(resp: &reqwest::Response) -> Option<u64> {
+    mem0_core::error::parse_retry_after(
+        resp.headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()),
+    )
 }
