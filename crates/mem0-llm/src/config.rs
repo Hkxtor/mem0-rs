@@ -31,7 +31,7 @@ pub struct LlmSettings {
     pub api_key: Option<String>,
     /// Sampling temperature (default 0.1).
     pub temperature: Option<f64>,
-    /// Max tokens to generate (default 2000).
+    /// Max tokens to generate (default 8192).
     pub max_tokens: Option<u32>,
     /// Nucleus sampling (default 0.1).
     pub top_p: Option<f64>,
@@ -67,9 +67,14 @@ impl LlmSettings {
     pub fn temperature(&self) -> f64 {
         self.temperature.unwrap_or(0.1)
     }
-    /// Effective max tokens (default 2000).
+    /// Effective max tokens.
+    ///
+    /// 8192, not the 2000 a chat call is usually given: extraction writes one JSON object
+    /// per memory, and an answer that runs out of budget is cut mid-string — which parses
+    /// as nothing at all. On thinking models the reasoning tokens count against this budget
+    /// too, so a modest-looking answer can hit it.
     pub fn max_tokens(&self) -> u32 {
-        self.max_tokens.unwrap_or(2000)
+        self.max_tokens.unwrap_or(8192)
     }
     /// Effective top_p (default 0.1).
     pub fn top_p(&self) -> f64 {

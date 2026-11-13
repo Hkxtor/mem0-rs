@@ -349,16 +349,29 @@ impl Memory {
                     return Ok(vec![]);
                 }
                 Some(arr) => arr,
-                None => {
-                    crate::diagnostics::record(
-                        crate::diagnostics::Stage::Unparsed,
-                        &response,
-                        0,
-                        None,
-                    );
-                    let _ = self.db.save_messages(messages, &session_scope);
-                    return Ok(vec![]);
-                }
+                None => match salvage_memory_array(&cleaned) {
+                    // The answer was cut off. Keep the entries that were complete: losing
+                    // them would discard memories the model already wrote and paid for.
+                    Some(arr) => {
+                        crate::diagnostics::record(
+                            crate::diagnostics::Stage::Salvaged,
+                            &response,
+                            arr.len(),
+                            None,
+                        );
+                        arr
+                    }
+                    None => {
+                        crate::diagnostics::record(
+                            crate::diagnostics::Stage::Unparsed,
+                            &response,
+                            0,
+                            None,
+                        );
+                        let _ = self.db.save_messages(messages, &session_scope);
+                        return Ok(vec![]);
+                    }
+                },
             }
         };
 
@@ -1300,6 +1313,53 @@ fn parse_memory_array(cleaned: &str) -> Option<Vec<Value>> {
     None
 }
 
+/// Recover the complete entries from an answer that is not valid JSON.
+///
+/// The usual cause is the model running out of output budget mid-array: everything before
+/// the cut is well-formed, the tail is not. Discarding the whole answer throws away
+/// memories the model already wrote, so instead walk the `"memory": [` array and keep every
+/// object that parses on its own, stopping at the first one that does not.
+///
+/// Only called when the strict parse failed, and only when an actual `"memory"` key is
+/// present — prose with braces in it must not become memories.
+fn salvage_memory_array(text: &str) -> Option<Vec<Value>> {
+    let key = text.find("\"memory\"")?;
+    let open = text[key..].find('[')? + key;
+    let mut items = Vec::new();
+    let mut pos = open + 1;
+    while let Some(rel) = text[pos..].find('{') {
+        let start = pos + rel;
+        // Parse one value from the slice: `StreamDeserializer::next` stops after the first
+        // complete value and does not care that the rest of the tail is broken.
+        let mut stream = serde_json::Deserializer::from_str(&text[start..]).into_iter::<Value>();
+        match stream.next() {
+            Some(Ok(v)) if v.is_object() => {
+                let consumed = stream.byte_offset();
+                items.push(v);
+                if consumed == 0 {
+                    break;
+                }
+                pos = start + consumed;
+            }
+            // A complete non-object entry means the array was not what we assumed, and an
+            // error means the tail is the part that got cut off.
+            _ => break,
+        }
+        // The array may have ended between the entry we just took and the next `{`.
+        let next_brace = text[pos..].find('{');
+        if let Some(bracket) = text[pos..].find(']') {
+            if next_brace.is_none_or(|b| bracket < b) {
+                break;
+            }
+        }
+    }
+    if items.is_empty() {
+        None
+    } else {
+        Some(items)
+    }
+}
+
 /// Format a [`SearchHit`] into the public memory-item shape.
 /// Port of the `MemoryItem(...).model_dump()` + promotion logic.
 /// Public wrapper for integration tests: format a hit into the API item shape.
@@ -1380,4 +1440,48 @@ pub(crate) fn format_memory_item(hit: &SearchHit, exclude_score: bool) -> Value 
     }
 
     Value::Object(item)
+}
+
+#[cfg(test)]
+mod salvage_tests {
+    use super::salvage_memory_array;
+
+    #[test]
+    fn keeps_the_entries_that_were_complete() {
+        // Exactly what a cut-off answer looks like: two whole objects, then the budget ends.
+        let cut = r#"{"memory": [{"id": "0", "text": "moved to Hangzhou"}, {"id": "1", "text": "rides 15 minutes"#;
+        assert!(super::parse_memory_array(cut).is_none(), "precondition");
+        let kept = salvage_memory_array(cut).expect("salvaged");
+        assert_eq!(kept.len(), 1, "only the complete entry survives: {kept:?}");
+        assert_eq!(kept[0]["text"], "moved to Hangzhou");
+    }
+
+    #[test]
+    fn keeps_everything_before_a_cut_in_a_long_answer() {
+        let cut = r#"{"memory": [{"id": "0", "text": "a"}, {"id": "1", "text": "b"}, {"id": "2", "text": "c"#;
+        assert_eq!(salvage_memory_array(cut).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn refuses_prose_that_merely_contains_braces() {
+        let prose = r#"I would store {"id": "0"} but the model was cut"#;
+        assert!(salvage_memory_array(prose).is_none());
+    }
+
+    #[test]
+    fn refuses_an_array_of_non_objects() {
+        assert!(salvage_memory_array(r#"{"memory": ["a", "b"]}"#).is_none());
+    }
+
+    #[test]
+    fn a_complete_answer_is_not_affected() {
+        let whole = r#"{"memory": [{"id": "0", "text": "x"}]}"#;
+        assert_eq!(super::parse_memory_array(whole).unwrap().len(), 1);
+        assert_eq!(salvage_memory_array(whole).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_empty_array_salvages_nothing() {
+        assert!(salvage_memory_array(r#"{"memory": []"#).is_none());
+    }
 }

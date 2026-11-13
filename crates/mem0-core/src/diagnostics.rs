@@ -37,6 +37,10 @@ pub enum Stage {
     Unparsed,
     /// The LLM answered and parsed, but every entry lacked usable text.
     NoUsableEntries,
+    /// The answer was not valid JSON (an answer cut off at the output-token budget looks
+    /// exactly like this), but complete entries could be recovered from it. The add does
+    /// store them, so this is a warning, not a failure.
+    Salvaged,
 }
 
 impl Stage {
@@ -46,6 +50,7 @@ impl Stage {
             Stage::EmptyAnswer => "empty_answer",
             Stage::Unparsed => "unparsed",
             Stage::NoUsableEntries => "no_usable_entries",
+            Stage::Salvaged => "salvaged",
         }
     }
 }
