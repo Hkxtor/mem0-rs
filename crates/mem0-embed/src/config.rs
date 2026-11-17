@@ -43,6 +43,11 @@ pub struct EmbedderSettings {
     pub base_url: Option<String>,
     /// Gemini output dimensionality.
     pub output_dimensionality: Option<usize>,
+    /// OpenAI-compatible `input_type` (asymmetric models such as NVIDIA's nemotron-3.5 need
+    /// it): `auto` derives it from the call — `passage` when storing, `query` when searching —
+    /// while `query` / `passage` pin it. Absent means the field is not sent at all, which is
+    /// what every provider that does not know it requires.
+    pub input_type: Option<String>,
     /// Azure connection settings.
     #[serde(default)]
     pub azure_kwargs: AzureKwargs,

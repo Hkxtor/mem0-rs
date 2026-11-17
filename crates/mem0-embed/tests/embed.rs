@@ -216,3 +216,104 @@ async fn a_rate_limited_embedding_keeps_its_status_and_retry_after() {
     assert_eq!(err.retry_after_secs(), Some(3));
     assert_eq!(err.code(), Some("EMBED_001"));
 }
+
+// ---------- input_type: the asymmetric-model handshake ----------
+
+/// The body the embedder actually sent, as JSON.
+async fn sent_body(server: &MockServer) -> serde_json::Value {
+    let requests = server.received_requests().await.unwrap();
+    serde_json::from_slice(&requests.last().unwrap().body).unwrap()
+}
+
+async fn embedder_with(
+    server: &MockServer,
+    extra: serde_json::Value,
+) -> Box<dyn mem0_core::traits::Embedder> {
+    Mock::given(method("POST"))
+        .and(path("/embeddings"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": [ { "embedding": [0.1], "index": 0 } ]
+        })))
+        .mount(server)
+        .await;
+    let mut cfg = json!({ "api_key": "k", "openai_base_url": server.uri() });
+    if let (Some(c), Some(e)) = (cfg.as_object_mut(), extra.as_object()) {
+        for (k, v) in e {
+            c.insert(k.clone(), v.clone());
+        }
+    }
+    build_embedder("openai", &cfg).unwrap()
+}
+
+#[tokio::test]
+async fn input_type_is_absent_unless_configured() {
+    let server = MockServer::start().await;
+    let embedder = embedder_with(&server, json!({})).await;
+    embedder.embed("hi", MemoryAction::Add).await.unwrap();
+    let body = sent_body(&server).await;
+    assert!(
+        body.get("input_type").is_none(),
+        "a provider that does not know the field must never see it: {body}"
+    );
+}
+
+#[tokio::test]
+async fn auto_input_type_follows_the_call() {
+    let server = MockServer::start().await;
+    let embedder = embedder_with(&server, json!({ "input_type": "auto" })).await;
+
+    embedder.embed("a memory", MemoryAction::Add).await.unwrap();
+    assert_eq!(sent_body(&server).await["input_type"], "passage");
+
+    embedder
+        .embed("a question", MemoryAction::Search)
+        .await
+        .unwrap();
+    assert_eq!(sent_body(&server).await["input_type"], "query");
+
+    embedder
+        .embed("rewritten", MemoryAction::Update)
+        .await
+        .unwrap();
+    assert_eq!(sent_body(&server).await["input_type"], "passage");
+}
+
+#[tokio::test]
+async fn a_fixed_input_type_ignores_the_call() {
+    let server = MockServer::start().await;
+    let embedder = embedder_with(&server, json!({ "input_type": "passage" })).await;
+    embedder
+        .embed("a question", MemoryAction::Search)
+        .await
+        .unwrap();
+    assert_eq!(sent_body(&server).await["input_type"], "passage");
+}
+
+#[tokio::test]
+async fn a_batch_carries_the_same_input_type() {
+    let server = MockServer::start().await;
+    let embedder = embedder_with(&server, json!({ "input_type": "auto" })).await;
+    let texts = vec!["one".to_string(), "two".to_string()];
+    embedder
+        .embed_batch(&texts, MemoryAction::Add)
+        .await
+        .unwrap();
+    assert_eq!(sent_body(&server).await["input_type"], "passage");
+}
+
+#[test]
+fn an_unknown_input_type_is_a_configuration_error() {
+    let cfg = json!({ "api_key": "k", "openai_base_url": "http://127.0.0.1:9/v1", "input_type": "sideways" });
+    let err = match build_embedder("openai", &cfg) {
+        Ok(_) => panic!("an unknown input_type must not build"),
+        Err(e) => e.to_string(),
+    };
+    assert!(err.contains("not one of: auto, query, passage"), "{err}");
+}
+
+#[test]
+fn an_empty_input_type_means_absent() {
+    let cfg =
+        json!({ "api_key": "k", "openai_base_url": "http://127.0.0.1:9/v1", "input_type": "  " });
+    assert!(build_embedder("openai", &cfg).is_ok());
+}

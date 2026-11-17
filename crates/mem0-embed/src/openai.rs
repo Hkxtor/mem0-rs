@@ -15,6 +15,7 @@ pub struct OpenAiEmbedder {
     model: String,
     dims: usize,
     pass_dims: bool,
+    input_type: InputType,
 }
 
 #[derive(Serialize)]
@@ -24,6 +25,8 @@ struct EmbedRequest<'a> {
     encoding_format: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     dimensions: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_type: Option<&'static str>,
 }
 
 #[derive(Deserialize)]
@@ -35,6 +38,49 @@ struct EmbedItem {
 #[derive(Deserialize)]
 struct EmbedResponse {
     data: Vec<EmbedItem>,
+}
+
+/// What to send as `input_type`, decided once at build time.
+///
+/// Providers that do not know the field reject the whole request when it appears, so the
+/// default is to leave it out entirely rather than to guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputType {
+    /// Not sent. Every provider accepts a body without it.
+    None,
+    /// `passage` when storing, `query` when searching — the asymmetric contract.
+    Auto,
+    /// Always this value, whatever the call is doing.
+    Fixed(&'static str),
+}
+
+impl InputType {
+    fn parse(raw: Option<&str>) -> Result<Self> {
+        let Some(raw) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
+            return Ok(Self::None);
+        };
+        match raw.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "query" => Ok(Self::Fixed("query")),
+            "passage" | "document" => Ok(Self::Fixed("passage")),
+            other => Err(Mem0Error::configuration(format!(
+                "embedder input_type '{other}' is not one of: auto, query, passage"
+            ))),
+        }
+    }
+
+    fn for_action(self, action: MemoryAction) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Fixed(v) => Some(v),
+            // Storing is a passage; looking something up is a query. `Update` rewrites stored
+            // text, so it is a passage too.
+            Self::Auto => Some(match action {
+                MemoryAction::Search => "query",
+                MemoryAction::Add | MemoryAction::Update => "passage",
+            }),
+        }
+    }
 }
 
 impl OpenAiEmbedder {
@@ -79,6 +125,7 @@ impl OpenAiEmbedder {
             .unwrap_or_else(|| "text-embedding-3-small".to_string());
         let pass_dims = settings.embedding_dims.is_some();
         let dims = settings.embedding_dims.unwrap_or(1536);
+        let input_type = InputType::parse(settings.input_type.as_deref())?;
         Ok(Self {
             client: reqwest::Client::new(),
             api_key,
@@ -86,10 +133,15 @@ impl OpenAiEmbedder {
             model,
             dims,
             pass_dims,
+            input_type,
         })
     }
 
-    async fn embed_request(&self, inputs: Vec<String>) -> Result<Vec<Vec<f32>>> {
+    async fn embed_request(
+        &self,
+        inputs: Vec<String>,
+        action: MemoryAction,
+    ) -> Result<Vec<Vec<f32>>> {
         let req = EmbedRequest {
             input: &inputs,
             model: &self.model,
@@ -99,6 +151,7 @@ impl OpenAiEmbedder {
             } else {
                 None
             },
+            input_type: self.input_type.for_action(action),
         };
         let url = format!("{}/embeddings", self.base_url);
         let resp = self
@@ -130,19 +183,19 @@ impl OpenAiEmbedder {
 
 #[async_trait]
 impl Embedder for OpenAiEmbedder {
-    async fn embed(&self, text: &str, _action: MemoryAction) -> Result<Vec<f32>> {
+    async fn embed(&self, text: &str, action: MemoryAction) -> Result<Vec<f32>> {
         let cleaned = text.replace('\n', " ");
-        let mut v = self.embed_request(vec![cleaned]).await?;
+        let mut v = self.embed_request(vec![cleaned], action).await?;
         v.pop()
             .ok_or_else(|| Mem0Error::embedding("OpenAI returned no embedding"))
     }
 
-    async fn embed_batch(&self, texts: &[String], _action: MemoryAction) -> Result<Vec<Vec<f32>>> {
+    async fn embed_batch(&self, texts: &[String], action: MemoryAction) -> Result<Vec<Vec<f32>>> {
         const MAX_BATCH: usize = 100;
         let cleaned: Vec<String> = texts.iter().map(|t| t.replace('\n', " ")).collect();
         let mut out = Vec::with_capacity(cleaned.len());
         for chunk in cleaned.chunks(MAX_BATCH) {
-            out.extend(self.embed_request(chunk.to_vec()).await?);
+            out.extend(self.embed_request(chunk.to_vec(), action).await?);
         }
         Ok(out)
     }
