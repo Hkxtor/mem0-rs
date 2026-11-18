@@ -101,6 +101,42 @@ pub trait VectorStore: Send + Sync {
     /// List records matching filters (no query vector).
     async fn list(&self, filters: &JsonMap, limit: Option<usize>) -> Result<Vec<SearchHit>>;
 
+    /// Count records by their `categories` payload array, and count the ones with none.
+    ///
+    /// The dashboard's category histogram needs aggregates, not rows: listing the collection to
+    /// count in the caller reads every vector to produce a dozen numbers. Backends that can group
+    /// in the store should override this; the default keeps every other backend correct by
+    /// falling back to a listing, with the same expiration rule `list_all` applies.
+    ///
+    /// Returns `(counts_by_category, unclassified)`.
+    async fn category_counts(&self) -> Result<(std::collections::BTreeMap<String, u64>, u64)> {
+        let hits = self.list(&JsonMap::new(), Some(10_000)).await?;
+        let mut counts = std::collections::BTreeMap::new();
+        let mut unclassified = 0u64;
+        for hit in hits {
+            let cats = hit
+                .payload
+                .get("categories")
+                .and_then(|c| c.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if cats.is_empty() {
+                // Unclassified counts only what the user can see: an expired memory is hidden
+                // from every list and search, so tagging it would spend tokens on invisible data.
+                if !crate::util::payload_is_expired(&hit.payload) {
+                    unclassified += 1;
+                }
+                continue;
+            }
+            for c in cats {
+                if let Some(name) = c.as_str() {
+                    *counts.entry(name.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+        Ok((counts, unclassified))
+    }
+
     /// Delete the entire collection.
     async fn delete_col(&self) -> Result<()>;
 
