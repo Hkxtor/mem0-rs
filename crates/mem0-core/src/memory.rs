@@ -317,12 +317,14 @@ impl Memory {
             Err(e) => {
                 tracing::error!("LLM extraction failed: {e}");
                 // Swallowed on purpose: a failed extraction must not fail the add. The
-                // reason is recorded so the caller can explain the empty result.
-                crate::diagnostics::record(
+                // reason is recorded so the caller can explain the empty result — including
+                // the upstream status, which is what tells a 429 from a bad key.
+                crate::diagnostics::record_with_status(
                     crate::diagnostics::Stage::LlmError,
                     "",
                     0,
                     Some(e.to_string()),
+                    e.http_status(),
                 );
                 return Ok(vec![]);
             }

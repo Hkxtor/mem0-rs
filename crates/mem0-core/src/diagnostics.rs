@@ -69,6 +69,13 @@ pub struct ExtractionDiagnostic {
     pub parsed_count: usize,
     /// The provider's error, when `stage` is [`Stage::LlmError`].
     pub error: Option<String>,
+    /// The upstream HTTP status behind that error, when it came from a response.
+    ///
+    /// `error` is prose: the caller that shows "why did this fail" has to read it, and a
+    /// message is not something to match on. The status is the machine-readable half — 429 is
+    /// a quota the operator can wait out or route around by adding a key, 401 is a bad key,
+    /// 500 is the provider's problem — so it rides along here rather than only inside the text.
+    pub status: Option<u16>,
 }
 
 /// How many records to keep. An `add` produces at most one, and the caller drains them
@@ -92,6 +99,20 @@ fn store() -> &'static Mutex<Store> {
 
 /// Record one attempt. Called from inside the extraction path.
 pub fn record(stage: Stage, answer: &str, parsed_count: usize, error: Option<String>) {
+    record_with_status(stage, answer, parsed_count, error, None);
+}
+
+/// Record one attempt, keeping the upstream status that [`record`] cannot carry.
+///
+/// Kept separate so every existing call site keeps compiling: only the LLM-error path has a
+/// status to report.
+pub fn record_with_status(
+    stage: Stage,
+    answer: &str,
+    parsed_count: usize,
+    error: Option<String>,
+    status: Option<u16>,
+) {
     let Ok(mut s) = store().lock() else {
         // A poisoned lock must not take down an add: diagnostics are optional.
         return;
@@ -108,6 +129,7 @@ pub fn record(stage: Stage, answer: &str, parsed_count: usize, error: Option<Str
         answer: answer.to_string(),
         parsed_count,
         error,
+        status,
     });
 }
 
@@ -153,5 +175,27 @@ mod tests {
         record(Stage::LlmError, "", 0, Some("401 unauthorized".into()));
         let seen = since(before);
         assert_eq!(seen[0].error.as_deref(), Some("401 unauthorized"));
+    }
+
+    /// The status is what a caller classifies on; the message is prose it must not match.
+    #[test]
+    fn a_status_survives_beside_the_message() {
+        let before = current_seq();
+        record_with_status(
+            Stage::LlmError,
+            "",
+            0,
+            Some("429 quota exceeded".into()),
+            Some(429),
+        );
+        let seen = since(before);
+        assert_eq!(seen[0].status, Some(429));
+        assert_eq!(seen[0].error.as_deref(), Some("429 quota exceeded"));
+
+        // The old signature still works and reports no status, which is honest: a record that
+        // did not come from a response has none.
+        let before = current_seq();
+        record(Stage::EmptyAnswer, "", 0, None);
+        assert_eq!(since(before)[0].status, None);
     }
 }

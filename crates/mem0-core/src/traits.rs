@@ -101,6 +101,32 @@ pub trait VectorStore: Send + Sync {
     /// List records matching filters (no query vector).
     async fn list(&self, filters: &JsonMap, limit: Option<usize>) -> Result<Vec<SearchHit>>;
 
+    /// One page of a collection-wide listing, plus how many rows there are in total.
+    ///
+    /// Export needs to walk the whole collection a page at a time: it used to stop at a fixed
+    /// limit, so a library past that limit was exported short with no way to tell. The total is
+    /// returned alongside the page so the caller can say "1000 of 1200" instead of guessing.
+    ///
+    /// The order must be stable across calls — a page offset over an unordered listing repeats
+    /// and drops rows whenever the store decides to return them differently. Backends that can
+    /// page in the store should override this; the default lists the whole collection and slices
+    /// it, which is correct but reads everything.
+    ///
+    /// Returns `(page, total)`.
+    async fn list_page(
+        &self,
+        filters: &JsonMap,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<SearchHit>, u64)> {
+        // No limit on the listing: `total` has to be the real number of rows, or the caller
+        // cannot tell "this is everything" from "this is the first page of more". Asking for
+        // only `offset + limit` rows would make a full collection look complete.
+        let all = self.list(filters, None).await?;
+        let total = all.len() as u64;
+        Ok((all.into_iter().skip(offset).take(limit).collect(), total))
+    }
+
     /// Count records by their `categories` payload array, and count the ones with none.
     ///
     /// The dashboard's category histogram needs aggregates, not rows: listing the collection to
@@ -179,4 +205,74 @@ pub trait Reranker: Send + Sync {
         documents: &[String],
         top_n: usize,
     ) -> Result<Vec<(usize, f32)>>;
+}
+
+#[cfg(test)]
+mod list_page_tests {
+    use super::*;
+    use crate::types::{JsonMap, VectorRecord};
+    use serde_json::json;
+
+    async fn store_with(n: usize) -> crate::testing::InMemoryVectorStore {
+        let store = crate::testing::InMemoryVectorStore::new();
+        let records: Vec<VectorRecord> = (0..n)
+            .map(|i| VectorRecord {
+                id: format!("id-{i:04}"),
+                vector: vec![0.0; 3],
+                payload: {
+                    let mut p = JsonMap::new();
+                    p.insert("data".into(), json!(format!("memory {i}")));
+                    // Distinct created_at so the in-memory listing order is deterministic.
+                    p.insert(
+                        "created_at".into(),
+                        json!(format!("2026-01-01T00:00:{i:02}Z")),
+                    );
+                    p
+                },
+            })
+            .collect();
+        store.insert(records).await.unwrap();
+        store
+    }
+
+    /// The default implementation is what every non-sqlite backend gets, so it has to page
+    /// correctly on its own: a page over an unordered listing repeats and drops rows.
+    #[tokio::test]
+    async fn the_default_pages_without_repeating_or_dropping() {
+        let store = store_with(7).await;
+        let filters = JsonMap::new();
+        let mut seen: Vec<String> = Vec::new();
+        let mut offset = 0;
+        loop {
+            let (page, total) = store.list_page(&filters, offset, 3).await.unwrap();
+            assert_eq!(total, 7, "total must be the whole collection, not the page");
+            if page.is_empty() {
+                break;
+            }
+            offset += page.len();
+            seen.extend(page.into_iter().map(|h| h.id));
+            if offset >= total as usize {
+                break;
+            }
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 7, "every row exactly once");
+    }
+
+    #[tokio::test]
+    async fn an_offset_past_the_end_is_an_empty_page_with_the_real_total() {
+        let store = store_with(4).await;
+        let (page, total) = store.list_page(&JsonMap::new(), 100, 10).await.unwrap();
+        assert!(page.is_empty());
+        assert_eq!(total, 4);
+    }
+
+    #[tokio::test]
+    async fn an_empty_store_reports_zero() {
+        let store = store_with(0).await;
+        let (page, total) = store.list_page(&JsonMap::new(), 0, 10).await.unwrap();
+        assert!(page.is_empty());
+        assert_eq!(total, 0);
+    }
 }
