@@ -757,6 +757,21 @@ impl Memory {
         Ok(json!({ "results": results }))
     }
 
+    /// One page of every stored memory including expired ones, plus how many there are in all.
+    ///
+    /// This is [`Self::list_all_include_expired`] as a walk instead of a single capped read, so
+    /// an export can cover the whole collection and still be able to say "this is everything"
+    /// or "there is more". Rows are formatted the same way, so a page is importable exactly like
+    /// the capped listing was.
+    pub async fn list_all_page(&self, offset: usize, limit: usize) -> Result<(Vec<Value>, u64)> {
+        let (hits, total) = self
+            .vector_store
+            .list_page(&JsonMap::new(), offset, limit)
+            .await?;
+        let items = hits.iter().map(|h| format_memory_item(h, false)).collect();
+        Ok((items, total))
+    }
+
     /// The vector store, for callers that need a raw listing (entities, export).
     ///
     /// Python's `Memory` exposes `self.vector_store`; this is the same handle.
